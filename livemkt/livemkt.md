@@ -1,0 +1,333 @@
+---
+title       : Web Crawler
+subtitle    : 生活市集
+author      : Bigmoumou
+job         : NTU Econ
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      # 
+widgets     : []            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+knit        : slidify::knit2slides
+---
+
+## 分享主軸 :
+
+### 1. 生活市集爬蟲
+
+### 2. 生活市集爬蟲 (使用平行運算)
+
+---
+
+## Tatget Website : 生活市集
+
+<iframe src="https://www.buy123.com.tw" height=600 width=800></iframe>
+
+---
+
+## 生活市集爬蟲思路 :
+```
+● 方法 1 :
+由於該網站所有商品都在首頁，只要不斷向下捲就會出現，
+另外每有捲到的商品爬不到，故第一個想法是透過動態捲動捲到底(約1hr)，
+再把資料 parse 下來一次抓完。
+```
+```
+● 缺點 : 
+很容易漏抓，像下捲動過多時(過1/5)就會開始出現一些商品並沒有被讀入，
+總商品約 3500 件，通常只抓的到 1800 ~ 2500 的區間。
+```
+```
+● 方法 2 :
+尋找所有商品的 url，這樣絕對不會漏抓，只是時間上可能要做些處理。
+```
+
+
+
+---
+
+## 生活市集爬蟲流程 : 
+```
+● Input Necessary Packages : 
+```
+
+```r
+library(httr)     # for web crawler
+library(rvest)    # for web crawler
+library(xml2)     # for web crawler
+library(gsubfn)   # for regular expression
+```
+```
+● Set target URL : 
+```
+
+```r
+# live market's url 
+targeturl <- "https://www.buy123.com.tw"
+```
+
+---
+
+## 生活市集爬蟲流程 :
+```
+● 將生活市集首頁的資訊 parse 下來 :
+```
+
+```r
+res <- GET(targeturl) %>% content("parse")
+res
+```
+```
+{xml_document}
+<html xmlns:ng="http://angularjs.org" ng-app="kuobrothersApp" id="ng-app" lang="zh-Hant-TW">
+[1] <head>\n  <meta charset="UTF-8"/>\n  <meta name="gby" content="&#10;&#10; ⇑⇑⇓⇓ ...
+[2] <body ng-controller="initCtrl">\n\t<!-- Google Tag Manager -->\n\t<noscript>...
+```
+
+---
+
+## 尋找資料所在地 :
+
+<iframe src="https://www.buy123.com.tw" height=600 width=800></iframe>
+
+---
+
+## 觀察 xpath 規律 :
+```
+● 前幾項商品的 xpath 如下，很明顯能看出規律 :
+```
+```
+//*[@id="container"]/div[4]/section[2]/a[1]/figure/img
+//*[@id="container"]/div[4]/section[2]/a[2]/figure/img
+//*[@id="container"]/div[4]/section[2]/a[3]/figure/img
+...
+//*[@id="container"]/div[4]/section[2]/a[n]/figure/img
+```
+```
+這邊我直接猜測商品資訊都放在下方路徑的子層 :
+`//*[@id="container"]/div[4]/section[2]`
+```
+
+---
+
+## 抓取所有商品 url :
+```
+● 抓取前述 xpath 下的子層 :
+```
+
+```r
+xpath <- '//*[@id="container"]/div[4]/section[2]'
+text1 <- res %>% html_node(xpath=xpath) %>% html_children()
+```
+```
+{xml_nodeset (3581)}
+ [1] <a contract="81987" href="/site/item/81987/%E5%90%B8%E6%BF%95%E9%98%B2%E9%9C%89%E7%A1%...
+ ...
+ [9] <a contract="82070" href="/site/item/82070/%E6%AB%A5%E6%AB%83%E5%9E%8B%E9%9B%99%E9%96%...
+[10] <lazy-item class="dealholder" ... contract="81252"...><a class="deal_name" href="/site/...
+ ...
+[13] <lazy-item class="dealholder" ... contract="71681"...><a class="deal_name" href="/site/...
+```
+```
+可以看到各商品的 href 標籤都藏在裡頭，不論時 contract 項目或是 lazy-item。
+```
+
+---
+
+## 抓取所有資料的 URL :
+```
+● 使用 regular expression 抓取並整理出所有商品 url :
+```
+
+```r
+url <- unlist(lapply(as.character(text1), strapplyc, 'href=\"(.*)#?ref'))
+url <- paste0('https://www.buy123.com.tw/',url)
+```
+```
+[1] "https://www.buy123.com.tw//site/item/81987/%E5%90%B8%E6%BF%95%E9%98%B2%E9%9C%..."         
+[2] "https://www.buy123.com.tw//site/item/80054/600D%E8%B6%85%E8%80%90%E9%87%8D%E9..."                   
+...
+[3577] "https://www.buy123.com.tw//site/item/75880/%E8%B6%85%E6%8C%BA%E4%BA%94%E5%..."         
+[3578] "https://www.buy123.com.tw//site/item/63420/%E5%A4%A7%E9%BA%A5%E7%94%BA%E9%..." 
+```
+```
+所有商品的 url 都抓下來了 :)
+```
+
+---
+
+## 開始進入各商品網頁把資料爬下來囉 !
+```
+● 由於在 R 中能避免使用迴圈就避免，取而代之該多使用的是 apply 家族。
+```
+```
+由於後續每個網頁都會重複以下動作，故先寫成 function 以簡化代碼數。
+```
+
+
+
+```r
+# set function for lapply :
+# 詳細說明如下 :
+webpage_parser <- function(x, xpath){
+  # 進到各商品 url 把網頁資訊 parse 下來
+  res_tmp <- GET(x) %>% content("parse")
+  # 使用後續指定的 xpath 取得文字 (text) 資料      
+  res_tmp %>% html_node(xpath=xpath) %>% html_text()
+  }
+```
+
+---
+
+## 開始進入各商品網頁把資料爬下來囉 !
+
+<div style='text-align: left;'>
+    <img height='500' src='.\img\p1.png' />
+</div>
+
+---
+
+## 開始進入各商品網頁把資料爬下來囉 !
+
+```r
+# 抓取商品名稱 :
+xpath='//*[@id="deal_detail_info"]/div[1]/div/h1'
+text1 <- unlist(lapply(url, function(x) webpage_parser(x, xpath=xpath)))
+# 抓取商品價格 :
+xpath='//*[@id="price"]'
+text2 <- unlist(lapply(url, function(x) webpage_parser(x, xpath=xpath)))
+text2 <- gsub('[\r\n\t]', '', text2)
+# 抓取商品購買人數 :
+xpath='//*[@id="deal_price_detail"]/div[7]'
+text3 <- unlist(lapply(url, function(x) webpage_parser(x, xpath=xpath)))
+# 先以 vector 形式儲存資料，後續再做 split 處理 :
+webdata <- paste(text1,text2,text3,sep='__')
+```
+
+---
+
+## 等待資料爬下來... `\(^.^)/`
+
+```
+上述 code 在 i7-2600 單線程下執行時間大約需要 : 1.5 hr
+```
+```
+如果用 R 的 for loop 的話，大約需要到 >= 2.5 hr 的時間 =.=
+```
+
+---
+
+## 等待資料爬下來... `\(^.^)/`
+
+```
+上述 code 在 i7-2600 單線程下執行時間大約需要 : 1.5 hr
+```
+```
+如果用 R 的 for loop 的話，大約需要到 >= 2.5 hr 的時間 =.=
+```
+<div style='text-align: left;'>
+    <img height='300' src='.\img\catwait.png' />
+</div>
+
+---
+
+## 有沒有什麼解套方法 `T_T` ?
+
+```
+● How about using doParallel packages?
+```
+```
+● What is Parallel ?
+```
+```
+● How to do Parallel ?
+```
+
+---
+
+## Introduction to doParallel packages
+<div style='text-align: center;'>
+    <img height='500' src='.\img\intropara.png' />
+</div>
+
+
+---
+
+## How to use doParallel packages?
+
+```
+# Input Necessary Packages : 
+library(doParallel)
+```
+
+```r
+### 以下僅使用 (邏輯執行緒 - 1) 是為了確保自己電腦還有最後的工作空間。
+# 偵測有幾個邏輯執行緒
+core <- detectCores()-1
+# 將原先儲存的 url 拆成 (邏輯執行緒 - 1)
+Split_df <- split(url, 1:core)
+# 開啟這 (邏輯執行緒 - 1) 的工作空間
+(cl <- (detectCores() - 1) %>%  makeCluster) %>% registerDoParallel
+```
+
+---
+
+## How to use doParallel packages?
+```
+● 僅是改成以下寫法，注意 function 要寫在裡面，這樣每個執行緒才都能讀到。
+```
+<div style='text-align: center;'>
+    <img height='400' src='.\img\para.png' />
+</div>
+
+---
+
+## How to use doParallel packages?
+
+```
+● 最後個別執行緒的 data 該怎麼合併在一起呢?
+```
+```
+透過 foreach 函數裡面的 .combine = 'c'，還有許多其他合併方式，
+最後資料會像下方模樣 :
+```
+```
+[1] "全新商品吸濕防霉硅藻土儲物罐__$280起__44已搶購" "專利首創二代自動反向傘__$579起__4321已搶購"    
+[3] "神器多功能方型不沾鍋組__$1999起__7已搶購"       "新強效珪藻土超吸水地墊__$379起__7531已搶購"    
+[5] "新C型可站立自動反向傘__$579起__1198已搶購"      "頂級舒柔棉床包被套組__$329起__4069已搶購"      
+[7] "【上黏】蟻螞愛除蟻膠__$333起__1992已搶購"       "終極強效高效珪藻土地墊__$389起__2010已搶購"    
+[9] "珪藻土吸水香皂盒/杯墊__$98起__1917已搶購"       "獅王奈米樂超濃縮洗衣精__$99起__9469已搶購"
+```
+```
+● 重點是運行時間呢 ???
+```
+
+---
+
+## How to use doParallel packages?
+
+```
+● 最後個別執行緒的 data 該怎麼合併在一起呢?
+```
+```
+透過 foreach 函數裡面的 .combine = 'c'，還有許多其他合併方式，
+最後資料會像下方模樣 :
+```
+```
+[1] "全新商品吸濕防霉硅藻土儲物罐__$280起__44已搶購" "專利首創二代自動反向傘__$579起__4321已搶購"    
+[3] "神器多功能方型不沾鍋組__$1999起__7已搶購"       "新強效珪藻土超吸水地墊__$379起__7531已搶購"    
+[5] "新C型可站立自動反向傘__$579起__1198已搶購"      "頂級舒柔棉床包被套組__$329起__4069已搶購"      
+[7] "【上黏】蟻螞愛除蟻膠__$333起__1992已搶購"       "終極強效高效珪藻土地墊__$389起__2010已搶購"    
+[9] "珪藻土吸水香皂盒/杯墊__$98起__1917已搶購"       "獅王奈米樂超濃縮洗衣精__$99起__9469已搶購"
+```
+```
+● 重點是運行時間呢 ???
+```
+```
+  10 - 20 min !!!
+```
+
+
+
+
+
